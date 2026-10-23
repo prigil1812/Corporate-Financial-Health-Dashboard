@@ -1,0 +1,106 @@
+-- =====================================================================
+-- DAX MEASURES: Financial Statements project
+-- Setup first (Model view):
+--   DimCompany[Ticker] 1 --> * FactFinancials[Ticker]   (single direction)
+--   DimYear[Year]      1 --> * FactFinancials[Year]     (single direction)
+-- Create an empty table named "_Measures" (Home > Enter Data) and add
+-- every measure below to it. ALWAYS use DimYear[Year] and
+-- DimCompany[Company] in visuals and slicers, never the fact table's.
+-- Units: money is USD millions. ROE/ROA etc. in the source are % points.
+-- =====================================================================
+
+-- ---------- CORE TOTALS ----------
+Revenue = SUM ( FactFinancials[Revenue] )
+Gross Profit = SUM ( FactFinancials[GrossProfit] )
+Net Income = SUM ( FactFinancials[NetIncome] )
+EBITDA = SUM ( FactFinancials[EBITDA] )
+Shareholder Equity = SUM ( FactFinancials[ShareholderEquity] )
+Operating Cash Flow = SUM ( FactFinancials[OperatingCF] )
+Investing Cash Flow = SUM ( FactFinancials[InvestingCF] )
+Financing Cash Flow = SUM ( FactFinancials[FinancingCF] )
+Net Cash Flow = [Operating Cash Flow] + [Investing Cash Flow] + [Financing Cash Flow]
+Employees = SUM ( FactFinancials[Employees] )
+Companies = DISTINCTCOUNT ( FactFinancials[Ticker] )
+
+-- ---------- PROFITABILITY ----------
+Gross Margin % = DIVIDE ( [Gross Profit], [Revenue] )
+Net Margin % = DIVIDE ( [Net Income], [Revenue] )
+EBITDA Margin % = DIVIDE ( [EBITDA], [Revenue] )
+
+ROE % =
+IF ( [Shareholder Equity] > 0, DIVIDE ( [Net Income], [Shareholder Equity] ) )
+
+Avg ROA % = AVERAGE ( FactFinancials[ROA] ) / 100
+
+-- ---------- GROWTH ----------
+Revenue PY =
+VAR CurrYear = MAX ( DimYear[Year] )
+RETURN CALCULATE ( [Revenue], DimYear[Year] = CurrYear - 1 )
+
+Revenue YoY % =
+VAR PY = [Revenue PY]
+RETURN IF ( NOT ISBLANK ( PY ), DIVIDE ( [Revenue] - PY, PY ) )
+
+Net Income PY =
+VAR CurrYear = MAX ( DimYear[Year] )
+RETURN CALCULATE ( [Net Income], DimYear[Year] = CurrYear - 1 )
+
+Net Income YoY % =
+VAR PY = [Net Income PY]
+RETURN IF ( NOT ISBLANK ( PY ), DIVIDE ( [Net Income] - PY, ABS ( PY ) ) )
+
+-- Best used per company; a mixed group changes membership over time
+Revenue CAGR % =
+VAR StartY = MIN ( DimYear[Year] )
+VAR EndY = MAX ( DimYear[Year] )
+VAR StartRev = CALCULATE ( [Revenue], DimYear[Year] = StartY )
+VAR EndRev = CALCULATE ( [Revenue], DimYear[Year] = EndY )
+VAR N = EndY - StartY
+RETURN IF ( N > 0 && StartRev > 0 && EndRev > 0, POWER ( DIVIDE ( EndRev, StartRev ), 1 / N ) - 1 )
+
+-- ---------- LIQUIDITY & LEVERAGE ----------
+Avg Current Ratio = AVERAGE ( FactFinancials[CurrentRatio] )
+Avg Debt to Equity = AVERAGE ( FactFinancials[DebtEquityRatio] )
+
+-- ---------- CASH & EFFICIENCY ----------
+Cash Conversion =
+IF ( [Net Income] > 0, DIVIDE ( [Operating Cash Flow], [Net Income] ) )
+
+Revenue per Employee ($K) = DIVIDE ( [Revenue] * 1000, [Employees] )
+
+-- ---------- SIZE & RANKING ----------
+Market Cap (B USD) =
+CALCULATE (
+    SUM ( FactFinancials[MarketCap_BUSD] ),
+    LASTNONBLANK ( DimYear[Year], CALCULATE ( SUM ( FactFinancials[MarketCap_BUSD] ) ) )
+)
+
+Revenue Share % =
+DIVIDE ( [Revenue], CALCULATE ( [Revenue], ALLSELECTED ( DimCompany ) ) )
+
+Revenue Rank =
+RANKX ( ALLSELECTED ( DimCompany[Company] ), [Revenue], , DESC, Dense )
+
+-- ---------- RISK ----------
+Loss-Making Company-Years =
+CALCULATE ( COUNTROWS ( FactFinancials ), FactFinancials[NetIncome] < 0 )
+
+Financial Risk Flag =
+VAR Loss = [Net Income] < 0
+VAR NegEquity = [Shareholder Equity] < 0
+VAR LowLiquidity = [Avg Current Ratio] < 1
+RETURN
+    SWITCH (
+        TRUE (),
+        Loss && ( NegEquity || LowLiquidity ), "High Risk",
+        Loss, "Watch",
+        "Healthy"
+    )
+
+-- ---------- DYNAMIC TITLE ----------
+Period Label =
+IF (
+    HASONEVALUE ( DimYear[Year] ),
+    "FY " & SELECTEDVALUE ( DimYear[Year] ),
+    "FY " & MIN ( DimYear[Year] ) & " - " & MAX ( DimYear[Year] )
+)
